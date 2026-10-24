@@ -84,3 +84,9 @@ DATABASE_URL=postgresql://emg:emg@localhost:5432/emg_demo python -m emg.cli seed
 * Map tiles load in the browser from `MAP_TILE_URL`.
 * Leaderboard schedules run in the worker (`python -m emg.services.jobs`). Nothing is
   published until a schedule has publishing on **and** its destination is enabled.
+
+## Vendor connectors
+
+Nightly portal logins (or APIs) keep Spark, Arcadia and other vendor statuses current
+for the leaderboards. See [docs/CONNECTORS.md](docs/CONNECTORS.md). Set
+`CONNECTOR_SECRET_KEY` (`python -m emg.cli connector-key`) before saving credentials.

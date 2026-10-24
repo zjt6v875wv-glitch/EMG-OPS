@@ -58,14 +58,18 @@ def work_forever(poll: float = 2.0) -> None:  # pragma: no cover
 
     last_tick = 0.0
     while True:
-        if time.time() - last_tick > 60:  # leaderboard schedules are checked once a minute
+        if time.time() - last_tick > 60:  # schedules (leaderboards, connectors) are checked once a minute
             last_tick = time.time()
             with connect() as c:
-                if not c.execute("select 1 from jobs where kind='leaderboards.tick' and status in ('queued','running')").fetchone():
-                    enqueue(c, "leaderboards.tick", {}, "scheduler")
+                if not c.execute("select 1 from jobs where kind='scheduler.tick' and status in ('queued','running')").fetchone():
+                    enqueue(c, "scheduler.tick", {}, "scheduler")
         if not run_one():
             time.sleep(poll)
 
 
 if __name__ == "__main__":  # pragma: no cover
-    work_forever()
+    # Run via the package module so handlers register on the same HANDLERS dict
+    # (under `python -m`, this file is `__main__`, a separate module object).
+    from emg.services.jobs import work_forever as _work
+
+    _work()

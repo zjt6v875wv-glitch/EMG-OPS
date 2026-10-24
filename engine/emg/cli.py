@@ -243,6 +243,23 @@ def cmd_seed_demo(a):
     print("Demo data ready. Sign in as owner@example.test / demo-password-1 (also manager@ and agent@).")
 
 
+def cmd_connector_key(a):
+    from .connectors.secrets import new_key
+
+    print(new_key())
+
+
+def cmd_run_connector(a):
+    from .services import connectors
+    from .services.storage import get_storage
+
+    with connect() as c:
+        row = c.execute("select id from connectors where name=%s", (a.name,)).fetchone()
+        if not row:
+            raise SystemExit(f"No connector named {a.name}")
+        print(json.dumps(connectors.run(c, get_storage(), row["id"], "cli"), indent=1, default=str))
+
+
 def main(argv=None):
     p = argparse.ArgumentParser(prog="emg")
     sp = p.add_subparsers(dest="cmd", required=True)
@@ -262,6 +279,8 @@ def main(argv=None):
     for name, fn in (("replay-w43", cmd_replay), ("db-replay-w43", cmd_db_replay)):
         x = sp.add_parser(name); x.add_argument("fixtures"); x.add_argument("--overlay"); x.set_defaults(fn=fn)
     sp.add_parser("seed-demo").set_defaults(fn=cmd_seed_demo)
+    sp.add_parser("connector-key").set_defaults(fn=cmd_connector_key)
+    x = sp.add_parser("run-connector"); x.add_argument("name"); x.set_defaults(fn=cmd_run_connector)
     a = p.parse_args(argv)
     a.fn(a)
 

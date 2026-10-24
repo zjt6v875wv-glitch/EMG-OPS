@@ -18,7 +18,7 @@ from fastapi.responses import JSONResponse, Response
 from pydantic import BaseModel
 
 from ..db.conn import _default, audit, connect
-from ..services import adjustments, auth, geo, imports, jobs, leaderboards, ledger, payments, people, reports, runs
+from ..services import adjustments, auth, connectors, geo, imports, jobs, leaderboards, ledger, payments, people, reports, runs
 from ..services import email as email_svc
 from ..services import rules as rules_svc
 from ..services.storage import get_storage
@@ -896,6 +896,54 @@ def leaderboard_file(run_id: uuid.UUID, idx: int, u=Depends(need("leaderboards.v
         raise HTTPException(404, "Unknown file")
     f = r["files"][idx]
     return Response(get_storage().get_bytes(f["storage_key"]), media_type=f["mime"], headers={"Content-Disposition": f'attachment; filename="{f["file_name"]}"'})
+
+
+# -- vendor connectors ------------------------------------------------------------------
+
+@app.get("/api/connectors")
+def connectors_list(u=Depends(need("connectors.manage")), c=Depends(db)):
+    return {"connectors": connectors.list_(c), "targets": connectors.TARGETS, "browser_ready": connectors.chromium_ok(),
+            "key_set": bool(os.environ.get("CONNECTOR_SECRET_KEY"))}
+
+
+@app.post("/api/connectors")
+def connectors_create(body: dict, u=Depends(need("connectors.manage")), c=Depends(db)):
+    return connectors.save(c, body, u["email"])
+
+
+@app.put("/api/connectors/{cid}")
+def connectors_update(cid: uuid.UUID, body: dict, u=Depends(need("connectors.manage")), c=Depends(db)):
+    return connectors.save(c, body, u["email"], cid)
+
+
+@app.put("/api/connectors/{cid}/credentials")
+def connectors_credentials(cid: uuid.UUID, body: dict, u=Depends(need("connectors.manage")), c=Depends(db)):
+    """Write-only: credentials are encrypted and never returned."""
+    return connectors.set_credentials(c, cid, body, u["email"])
+
+
+@app.post("/api/connectors/{cid}/run")
+def connectors_run(cid: uuid.UUID, u=Depends(need("connectors.manage")), c=Depends(db)):
+    return jobs.enqueue(c, "connector.run", {"connector_id": str(cid), "trigger": "manual"}, u["email"])
+
+
+@app.get("/api/connectors/{cid}/runs")
+def connectors_runs(cid: uuid.UUID, u=Depends(need("connectors.manage")), c=Depends(db)):
+    return connectors.runs(c, cid)
+
+
+@app.get("/api/connector-runs/{rid}/screenshot")
+def connectors_screenshot(rid: uuid.UUID, u=Depends(need("connectors.manage")), c=Depends(db)):
+    r = c.execute("select screenshot_key from connector_runs where id=%s", (rid,)).fetchone()
+    if not r or not r["screenshot_key"]:
+        raise HTTPException(404, "No screenshot")
+    return Response(get_storage().get_bytes(r["screenshot_key"]), media_type="image/png")
+
+
+@app.post("/api/connectors/test-mapping")
+async def connectors_test_mapping(file: UploadFile = File(...), mapping: str = Form(...), u=Depends(need("connectors.manage"))):
+    """Upload one export by hand to check the column mapping before the first automated run."""
+    return connectors.test_mapping(file.filename or "export.csv", await file.read(), json.loads(mapping))
 
 
 @app.get("/api/health")

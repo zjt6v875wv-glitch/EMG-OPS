@@ -40,6 +40,7 @@ PERMS = {
     "territories.manage": {"owner", "admin"},
     "leaderboards.view": set(ROLES),
     "leaderboards.publish": {"owner", "admin"},
+    "connectors.manage": {"owner", "admin"},
     "audit.view": {"owner", "admin"},
 }
 

@@ -88,7 +88,7 @@ def _facts(c, tz: str, vendors: list[str] | None) -> list[dict]:
             elif e["id"] in first_ok:
                 appr, src = local_date(first_ok[e["id"]], tz), "first_seen"
         out.append({"vendor": e["vendor"], "enrollment_id": e["enrollment_id"], "seller": seller_of(e["raw_rep"], e["vendor"]),
-                    "sale_date": e["sale_date"] if e["origin"] == "payroll" else None, "category": cat, "status": e["status"],
+                    "sale_date": e["sale_date"] if e["origin"] != "status_report" else None, "category": cat, "status": e["status"],
                     "approved_on": appr, "approval_source": src})
     return out
 

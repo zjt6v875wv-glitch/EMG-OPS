@@ -38,8 +38,22 @@ def geocode_run(c, p: dict, actor: str):
     return geo.geocode_pending(c, actor, int(p.get("limit", 5000)))
 
 
-@handler("leaderboards.tick")
-def leaderboards_tick(c, p: dict, actor: str):
-    from . import leaderboards
+@handler("scheduler.tick")
+def scheduler_tick(c, p: dict, actor: str):
+    """Once a minute: generate due leaderboards and queue due connector syncs."""
+    from . import connectors, jobs, leaderboards
 
-    return {"ran": leaderboards.run_due(c, get_storage())}
+    queued = []
+    for conn in connectors.due(c):
+        if not c.execute("select 1 from jobs where kind='connector.run' and status in ('queued','running') and payload->>'connector_id'=%s",
+                         (str(conn["id"]),)).fetchone():
+            jobs.enqueue(c, "connector.run", {"connector_id": str(conn["id"]), "trigger": "schedule"}, "scheduler")
+            queued.append(conn["name"])
+    return {"leaderboards": leaderboards.run_due(c, get_storage()), "connectors_queued": queued}
+
+
+@handler("connector.run")
+def connector_run(c, p: dict, actor: str):
+    from . import connectors
+
+    return connectors.run(c, get_storage(), p["connector_id"], actor, p.get("trigger", "manual"))

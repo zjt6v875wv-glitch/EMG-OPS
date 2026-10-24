@@ -20,6 +20,7 @@ const NAV: { href: string; label: string; perm?: string }[] = [
   { href: "/people", label: "People", perm: "payroll.view_all" },
   { href: "/map", label: "Sales map", perm: "map.view" },
   { href: "/leaderboards", label: "Leaderboards", perm: "leaderboards.view" },
+  { href: "/connectors", label: "Vendor connectors", perm: "connectors.manage" },
   { href: "/audit", label: "Audit log", perm: "audit.view" },
   { href: "/users", label: "Users", perm: "users.manage" },
 ];
