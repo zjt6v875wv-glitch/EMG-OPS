@@ -203,6 +203,46 @@ def cmd_db_replay(a):
     sys.exit(0 if out["ok"] else 1)
 
 
+def cmd_seed_demo(a):
+    """Fictional demo data (sample rules, users, enrollments with locations, a territory).
+    Safe for a public demo: no real names, customers or addresses."""
+    import random
+    from datetime import date, timedelta
+
+    from .services import auth, geo, rules as rules_svc
+    from .services.storage import get_storage
+
+    rnd = random.Random(7)
+    root = Path(__file__).resolve().parents[2]
+    with connect() as c:
+        if c.execute("select 1 from enrollments limit 1").fetchone():
+            raise SystemExit("seed-demo only runs on an empty database")
+        v = rules_svc.create(c, json.loads((root / "config/sample/rules.sample.json").read_text()), "sample", "demo")
+        rules_svc.activate(c, v["version"], "demo", "demo rules")
+        for email, name, role, person in (("owner@example.test", "Demo Owner", "owner", None), ("manager@example.test", "Jordan Lee", "manager", "Jordan Lee"),
+                                          ("agent@example.test", "Alex Rivera", "agent", "Alex Rivera")):
+            auth.create_user(c, email, name, role, "demo-password-1", "demo", person)
+        reps = ["Alex Rivera", "Sam Patel", "Taylor Brooks", "Casey Morgan", "Jordan Lee"]
+        statuses = [("Closed Won", 5), ("Pending Review", 3), ("Paid by vendor", 3), ("Cannot Process - Need Updated Bill Copy", 1), ("Denied - Not in Approved Territory", 1),
+                    ("Canceled", 1), ("Charged back", 1)]
+        pool = [s for s, w in statuses for _ in range(w)]
+        end = date.today()
+        for i in range(400):
+            vendor = rnd.choice(["Nexamp", "Spark", "Perch"])
+            sold = end - timedelta(days=rnd.randint(0, 27))
+            st = rnd.choice(pool)
+            ok = st in ("Closed Won", "Paid by vendor")
+            lat, lng = 38.9 + rnd.gauss(0, 0.35), -94.9 + rnd.gauss(0, 0.5)
+            c.execute("insert into enrollments(vendor,enrollment_id,customer_name,raw_rep,service_address,city,state,zip,sale_date,status,approval_date,approval_date_source,"
+                      "kwh,lat,lng,geocode_status,geocode_confidence) values (%s,%s,%s,%s,%s,'Demo City','KS','66000',%s,%s,%s,%s,%s,%s,%s,'matched',0.95)",
+                      (vendor, f"D{100000 + i}", f"Demo Customer {i}", rnd.choice(reps), f"{100 + i} Example Ave", sold, st,
+                       min(end, sold + timedelta(days=rnd.randint(1, 6))) if ok else None, "vendor" if ok else None, rnd.randint(2, 12) * 500, lat, lng))
+        box = {"type": "Feature", "properties": {"name": "Demo Territory"},
+               "geometry": {"type": "Polygon", "coordinates": [[[-95.6, 38.4], [-94.2, 38.4], [-94.2, 39.4], [-95.6, 39.4], [-95.6, 38.4]]]}}
+        geo.territory_import(c, get_storage(), "demo.geojson", json.dumps(box).encode(), "territory", None, "demo")
+    print("Demo data ready. Sign in as owner@example.test / demo-password-1 (also manager@ and agent@).")
+
+
 def main(argv=None):
     p = argparse.ArgumentParser(prog="emg")
     sp = p.add_subparsers(dest="cmd", required=True)
@@ -221,6 +261,7 @@ def main(argv=None):
     x = sp.add_parser("finalize"); x.add_argument("run"); x.add_argument("--key", required=True); x.set_defaults(fn=cmd_finalize)
     for name, fn in (("replay-w43", cmd_replay), ("db-replay-w43", cmd_db_replay)):
         x = sp.add_parser(name); x.add_argument("fixtures"); x.add_argument("--overlay"); x.set_defaults(fn=fn)
+    sp.add_parser("seed-demo").set_defaults(fn=cmd_seed_demo)
     a = p.parse_args(argv)
     a.fn(a)
 

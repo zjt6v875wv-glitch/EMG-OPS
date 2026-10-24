@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import json
 import os
+import uuid
 from contextlib import contextmanager
 from decimal import Decimal
 from pathlib import Path
@@ -26,6 +27,8 @@ def _default(o):
         return o.isoformat()
     if isinstance(o, set):
         return sorted(o)
+    if isinstance(o, uuid.UUID):
+        return str(o)
     raise TypeError(f"not JSON serializable: {type(o)}")
 
 

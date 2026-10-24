@@ -56,7 +56,13 @@ def run_one(worker: str | None = None) -> bool:
 def work_forever(poll: float = 2.0) -> None:  # pragma: no cover
     from . import job_handlers  # noqa: F401  (registers handlers)
 
+    last_tick = 0.0
     while True:
+        if time.time() - last_tick > 60:  # leaderboard schedules are checked once a minute
+            last_tick = time.time()
+            with connect() as c:
+                if not c.execute("select 1 from jobs where kind='leaderboards.tick' and status in ('queued','running')").fetchone():
+                    enqueue(c, "leaderboards.tick", {}, "scheduler")
         if not run_one():
             time.sleep(poll)
 

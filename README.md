@@ -67,3 +67,20 @@ Corrections produce `..._Final_Rev3_...` files, and earlier final revisions stay
 **Email statements** lists every statement with its verified roster address, or the reason it can't be sent (no email, unverified, excluded). Choose people, type `SEND 2026-W43`, and each person receives one message with only their own PDF attached. Retries never resend. A send that was interrupted is marked *unknown* for a human to check. Delivery and bounce events arrive by webhook (`POST /api/email/events` with `X-Webhook-Secret`) or can be marked by hand. Real delivery needs `EMAIL_SEND_ENABLED=1` and SMTP settings. Otherwise messages go to an outbox in storage.
 
 To refresh emails from a newer control workbook, run `python -m emg.cli sync-roster CONTROL.xlsx`.
+
+## Sales map and leaderboards (Phase 3)
+
+See [docs/MAP_AND_LEADERBOARDS.md](docs/MAP_AND_LEADERBOARDS.md) for the rules.
+
+```bash
+# Fictional demo data (safe for a public demo): sample rules, 3 users, 400 located sales, a territory
+createdb emg_demo && DATABASE_URL=postgresql://emg:emg@localhost:5432/emg_demo python -m emg.cli migrate
+DATABASE_URL=postgresql://emg:emg@localhost:5432/emg_demo python -m emg.cli seed-demo
+```
+
+* Load service addresses from **Sales map → Map data**: a project status report, the
+  address mapping export, or a coordinates CSV. Then click **Locate new addresses**. This
+  needs outbound access to `geocoding.geo.census.gov` from the worker.
+* Map tiles load in the browser from `MAP_TILE_URL`.
+* Leaderboard schedules run in the worker (`python -m emg.services.jobs`). Nothing is
+  published until a schedule has publishing on **and** its destination is enabled.

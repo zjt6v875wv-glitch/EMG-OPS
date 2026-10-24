@@ -29,3 +29,17 @@ def reports_build(c, p: dict, actor: str):
 
 
 from . import email  # noqa: E402,F401  (registers email.send)
+
+
+@handler("geocode.run")
+def geocode_run(c, p: dict, actor: str):
+    from . import geo
+
+    return geo.geocode_pending(c, actor, int(p.get("limit", 5000)))
+
+
+@handler("leaderboards.tick")
+def leaderboards_tick(c, p: dict, actor: str):
+    from . import leaderboards
+
+    return {"ran": leaderboards.run_due(c, get_storage())}

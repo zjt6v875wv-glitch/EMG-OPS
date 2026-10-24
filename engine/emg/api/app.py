@@ -7,6 +7,7 @@ from __future__ import annotations
 import json
 import os
 import uuid
+from urllib.parse import urlparse
 from decimal import Decimal
 from typing import Any
 
@@ -17,7 +18,7 @@ from fastapi.responses import JSONResponse, Response
 from pydantic import BaseModel
 
 from ..db.conn import _default, audit, connect
-from ..services import adjustments, auth, imports, jobs, ledger, payments, people, reports, runs
+from ..services import adjustments, auth, geo, imports, jobs, leaderboards, ledger, payments, people, reports, runs
 from ..services import email as email_svc
 from ..services import rules as rules_svc
 from ..services.storage import get_storage
@@ -669,6 +670,232 @@ def enrollment(vendor: str, enrollment_id: str, u=Depends(need("payroll.view_all
         "payouts": c.execute("select p.*, pr.rule_set_version from payout_evidence p left join payroll_runs pr on pr.id=p.run_id"
                              " where p.vendor=%s and p.enrollment_id=%s order by p.id", (vendor, enrollment_id)).fetchall(),
     }
+
+
+# -- sales map ---------------------------------------------------------------------
+
+class MapFilters(BaseModel):
+    vendors: list[str] | None = None
+    categories: list[str] | None = None
+    sellers: list[str] | None = None
+    date_from: str | None = None
+    date_to: str | None = None
+    project: str | None = None
+    territory: str | None = None
+    out_of_territory: bool | None = None
+    q: str | None = None
+    min_confidence: float | None = None
+    bbox: list[float] | None = None
+
+
+def _filters(f: MapFilters) -> dict:
+    return {k: v for k, v in f.model_dump().items() if v not in (None, [], "")}
+
+
+@app.post("/api/map/points")
+def map_points(f: MapFilters, u=Depends(need("map.view")), c=Depends(db)):
+    res = geo.points(c, u, _filters(f))
+    return res | {"totals": geo.totals(res["points"])}
+
+
+@app.post("/api/map/export")
+def map_export(f: MapFilters, u=Depends(need("map.view")), c=Depends(db)):
+    res = geo.points(c, u, _filters(f))
+    audit(c, u["email"], "map.export", "map", None, None, {"filters": _filters(f), "rows": len(res["points"])})
+    return Response(geo.export_csv(res), media_type="text/csv", headers={"Content-Disposition": 'attachment; filename="EMG_Sales_Map.csv"'})
+
+
+@app.get("/api/map/geocode/queue")
+def geocode_queue(u=Depends(need("map.view_all")), c=Depends(db)):
+    return {"rows": geo.geocode_queue(c),
+            "summary": c.execute("select coalesce(geocode_status, case when service_address is null then 'no_address' else 'not_geocoded' end) s, count(*) n"
+                                 " from enrollments group by 1 order by 2 desc").fetchall()}
+
+
+@app.post("/api/map/geocode/run")
+def geocode_run(u=Depends(need("territories.manage")), c=Depends(db)):
+    return jobs.enqueue(c, "geocode.run", {}, u["email"])
+
+
+class Location(BaseModel):
+    vendor: str
+    enrollment_id: str
+    lat: float
+    lng: float
+
+
+@app.post("/api/map/location")
+def map_location(body: Location, u=Depends(need("territories.manage")), c=Depends(db)):
+    return geo.set_location(c, body.vendor, body.enrollment_id, body.lat, body.lng, u["email"])
+
+
+@app.post("/api/map/enrich")
+async def enrich_upload(file: UploadFile = File(...), vendor: str | None = Form(None), kind: str | None = Form(None),
+                        u=Depends(need("territories.manage")), c=Depends(db)):
+    sf = imports.store_upload(c, get_storage(), await file.read(), file.filename or "addresses.xlsx", u["email"])
+    b = geo.enrich_preview(c, get_storage(), sf["id"], u["email"], vendor or None, kind or None)
+    return b
+
+
+@app.get("/api/map/enrich/{batch_id}")
+def enrich_batch(batch_id: uuid.UUID, u=Depends(need("territories.manage")), c=Depends(db)):
+    b = c.execute("select * from enrichment_batches where id=%s", (batch_id,)).fetchone()
+    if not b:
+        raise HTTPException(404, "Unknown batch")
+    return b
+
+
+@app.post("/api/map/enrich/{batch_id}/apply")
+def enrich_apply(batch_id: uuid.UUID, u=Depends(need("territories.manage")), c=Depends(db)):
+    return geo.enrich_apply(c, batch_id, u["email"])
+
+
+@app.get("/api/territories")
+def list_territories(geometry: bool = True, u=Depends(need("map.view")), c=Depends(db)):
+    return {"territories": geo.territories(c, geometry), "capacity": geo.capacity(c)}
+
+
+@app.post("/api/territories/preview")
+async def territories_preview(file: UploadFile = File(...), u=Depends(need("territories.manage"))):
+    return {"features": geo.territory_preview(file.filename or "", await file.read())}
+
+
+@app.post("/api/territories")
+async def territories_import(file: UploadFile = File(...), kind: str = Form("territory"), vendor: str | None = Form(None),
+                             u=Depends(need("territories.manage")), c=Depends(db)):
+    return {"created": geo.territory_import(c, get_storage(), file.filename or "", await file.read(), kind, vendor or None, u["email"])}
+
+
+class TerritoryPatch(BaseModel):
+    name: str | None = None
+    active: bool | None = None
+    capacity_kwh: Decimal | None = None
+    capacity_enabled: bool | None = None
+    vendor: str | None = None
+
+
+@app.patch("/api/territories/{tid}")
+def territory_patch(tid: uuid.UUID, body: TerritoryPatch, u=Depends(need("territories.manage")), c=Depends(db)):
+    return geo.territory_update(c, tid, u["email"], **body.model_dump())
+
+
+class Allocation(BaseModel):
+    vendor: str
+    enrollment_id: str
+    kwh: Decimal | None = None
+    note: str = ""
+
+
+@app.get("/api/territories/{tid}/allocations")
+def territory_allocations(tid: uuid.UUID, u=Depends(need("map.view_all")), c=Depends(db)):
+    return c.execute("select * from capacity_allocations where territory_id=%s order by released_at nulls first, allocated_at desc", (tid,)).fetchall()
+
+
+@app.post("/api/territories/{tid}/allocations")
+def territory_allocate(tid: uuid.UUID, body: Allocation, u=Depends(need("territories.manage")), c=Depends(db)):
+    return geo.allocate(c, tid, body.vendor, body.enrollment_id, u["email"], body.kwh, body.note)
+
+
+@app.post("/api/allocations/{aid}/release")
+def allocation_release(aid: uuid.UUID, u=Depends(need("territories.manage")), c=Depends(db)):
+    return geo.release(c, aid, u["email"])
+
+
+# -- leaderboards --------------------------------------------------------------------
+
+def _board_args(cadence: str, day: str | None, metric: str, group: str, vendors: str | None, top: int, manager: str | None):
+    from datetime import date as _d
+
+    return dict(cadence=cadence, anchor=_d.fromisoformat(day) if day else None, metric=metric, group=group,
+                vendors=[v for v in (vendors or "").split(",") if v] or None, top=max(1, min(top, 100)), manager=manager or None)
+
+
+@app.get("/api/leaderboards")
+def leaderboard(cadence: str = "daily", day: str | None = None, metric: str = "written", group: str = "agent", vendors: str | None = None,
+                top: int = 10, manager: str | None = None, u=Depends(need("leaderboards.view")), c=Depends(db)):
+    return leaderboards.compute(c, u, **_board_args(cadence, day, metric, group, vendors, top, manager))
+
+
+@app.get("/api/leaderboards/export.{ext}")
+def leaderboard_export(ext: str, cadence: str = "daily", day: str | None = None, metric: str = "written", group: str = "agent",
+                       vendors: str | None = None, top: int = 10, manager: str | None = None, u=Depends(need("leaderboards.view")), c=Depends(db)):
+    if ext not in leaderboards.EXPORTS:
+        raise HTTPException(404, "Export as csv, pdf or png")
+    res = leaderboards.compute(c, u, **_board_args(cadence, day, metric, group, vendors, top, manager))
+    fn, mime = leaderboards.EXPORTS[ext]
+    return Response(fn(res), media_type=mime, headers={"Content-Disposition": f'attachment; filename="{leaderboards.file_name(res, ext)}"'})
+
+
+@app.get("/api/leaderboards/drilldown")
+def leaderboard_drilldown(name: str, cadence: str = "daily", day: str | None = None, metric: str = "written", group: str = "agent",
+                          vendors: str | None = None, u=Depends(need("leaderboards.view")), c=Depends(db)):
+    a = _board_args(cadence, day, metric, group, vendors, 10, None)
+    return {"rows": leaderboards.drilldown(c, u, name, cadence, a["anchor"] or leaderboards.today(leaderboards.timezone(c)), metric, group, a["vendors"])}
+
+
+@app.get("/api/leaderboards/settings")
+def leaderboard_settings(u=Depends(need("leaderboards.publish")), c=Depends(db)):
+    return {"timezone": leaderboards.timezone(c), "destinations": [{**d, "url": f"{urlparse(d['url']).netloc}/..." if d.get("url") else None} for d in leaderboards.destinations(c)],
+            "schedules": c.execute("select * from leaderboard_schedules order by created_at").fetchall(),
+            "runs": c.execute("select id, schedule_id, cadence, period_start, period_end, files, published, publish_result, created_at from leaderboard_runs"
+                              " order by created_at desc limit 50").fetchall()}
+
+
+class TzBody(BaseModel):
+    timezone: str
+
+
+@app.put("/api/leaderboards/timezone")
+def leaderboard_tz(body: TzBody, u=Depends(need("leaderboards.publish")), c=Depends(db)):
+    from zoneinfo import ZoneInfo
+
+    ZoneInfo(body.timezone)
+    c.execute("insert into settings(key,value,updated_by) values ('timezone',%s,%s) on conflict (key) do update set value=excluded.value, updated_by=excluded.updated_by,"
+              " updated_at=now()", (json.dumps(body.timezone), u["email"]))
+    audit(c, u["email"], "settings.timezone", "settings", "timezone", None, body.timezone)
+    return {"timezone": body.timezone}
+
+
+@app.put("/api/leaderboards/destinations")
+def leaderboard_destination(body: dict, u=Depends(need("leaderboards.publish")), c=Depends(db)):
+    """Add or replace one destination by name (an empty URL keeps the stored one)."""
+    return [{**d, "url": bool(d.get("url"))} for d in leaderboards.upsert_destination(c, body, u["email"])]
+
+
+@app.post("/api/leaderboards/schedules")
+def schedule_create(body: dict, u=Depends(need("leaderboards.publish")), c=Depends(db)):
+    return leaderboards.save_schedule(c, body, u["email"])
+
+
+@app.put("/api/leaderboards/schedules/{sid}")
+def schedule_update(sid: uuid.UUID, body: dict, u=Depends(need("leaderboards.publish")), c=Depends(db)):
+    return leaderboards.save_schedule(c, body, u["email"], sid)
+
+
+@app.post("/api/leaderboards/schedules/{sid}/run")
+def schedule_run(sid: uuid.UUID, day: str | None = None, u=Depends(need("leaderboards.publish")), c=Depends(db)):
+    """Generate now for the period containing ``day`` (default: the last complete period)."""
+    from datetime import date as _d, timedelta
+
+    s = c.execute("select * from leaderboard_schedules where id=%s", (sid,)).fetchone()
+    if not s:
+        raise HTTPException(404, "Unknown schedule")
+    t = leaderboards.today(s["timezone"])
+    anchor = _d.fromisoformat(day) if day else (t - timedelta(days=1) if s["cadence"] == "daily" else t - timedelta(days=7))
+    start = leaderboards.period(s["cadence"], anchor)[0]
+    r = leaderboards.run_schedule(c, get_storage(), s, start, u["email"])
+    if not r:
+        raise HTTPException(409, "This period was already generated for this schedule")
+    return r
+
+
+@app.get("/api/leaderboards/runs/{run_id}/files/{idx}")
+def leaderboard_file(run_id: uuid.UUID, idx: int, u=Depends(need("leaderboards.view")), c=Depends(db)):
+    r = c.execute("select files from leaderboard_runs where id=%s", (run_id,)).fetchone()
+    if not r or not (0 <= idx < len(r["files"])):
+        raise HTTPException(404, "Unknown file")
+    f = r["files"][idx]
+    return Response(get_storage().get_bytes(f["storage_key"]), media_type=f["mime"], headers={"Content-Disposition": f'attachment; filename="{f["file_name"]}"'})
 
 
 @app.get("/api/health")
