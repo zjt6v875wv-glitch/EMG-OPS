@@ -113,6 +113,15 @@ def match_chargebacks(rs: RuleSet, inputs: WeekInputs, res_review: list[ReviewIt
     return out
 
 
+def owner(rs: RuleSet, raw_rep: str, sale_date, vendor: str, week: str) -> str:
+    """Who a row belongs to this week: badge ownership, aliases, then live temporary assignments."""
+    seller = resolve_seller(rs, raw_rep, sale_date, vendor, week)[0]
+    for a in rs.assignments:
+        if a.live(week) and rs.canon(a.source_rep) == seller:
+            return rs.canon(a.actual_seller)
+    return seller
+
+
 def calculate_week(rs: RuleSet, inputs: WeekInputs) -> WeekBundle:
     week = inputs.week
     year = parse_week(week)[0]
@@ -150,13 +159,15 @@ def calculate_week(rs: RuleSet, inputs: WeekInputs) -> WeekBundle:
                   and (not r.sale_date or r.sale_date.year == year)]
     for r in nonpayable:
         seller = resolve_seller(rs, r.raw_rep, r.sale_date, r.vendor, week)[0]
-        r.raw.setdefault("seller", seller)
+        r.raw.setdefault("seller", owner(rs, r.raw_rep, r.sale_date, r.vendor, week))
         route = next((x for x in rs.routing if x.live(week) and x.vendor == r.vendor and seller in x.sellers), None)
         if route:
             r.raw["company_payee"] = route.payee  # reported to the company (e.g. AEG), not to EMG individuals
         elif seller not in rs.people and not rs.aliases.known(r.raw_rep, r.vendor) and not any(m.agent == seller for m in rs.memberships):
             review.append(ReviewItem("unknown_agent", f"Agent name {r.raw_rep!r} on a non-payable row is not in the alias table or roster", r.vendor, r.enrollment_id, seller, blocking=False))
     pending = [r for r in inputs.rows if r.line_type == "pending"]
+    for r in pending:
+        r.raw.setdefault("seller", owner(rs, r.raw_rep, r.sale_date, r.vendor, week))
 
     result = run_payroll(rs, week, comm.lines, inputs.openings, chargebacks, inputs.adjustments, comm.holds)
 

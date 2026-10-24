@@ -51,3 +51,19 @@ cd engine && pytest
 Database tests use `TEST_DATABASE_URL` (default `postgresql://emg:emg@localhost:5432/emg_test`) and recreate its schema. The Week 43 acceptance replay runs only when the private fixtures are present (`EMG_FIXTURES`, `EMG_RULES_OVERLAY`). It must match the final for every person: 28 checks, $17,591.81, AEG $5,760.
 
 See `docs/` for rounding, rules, roles and operations.
+
+## Reports and statement email (Phase 2)
+
+From **Reports**, build the week's package for the finalized (or preliminary) run:
+
+- Master workbook (`EMG_Week43_Final_Payroll_2026-10-23.xlsx`): summary, payroll calculation, payable checks, earnings detail, chargebacks, company adjustments, non-payable, pending, week adjustments, review, vendor reconciliation, sources with hashes.
+- Agent statements (`Jane_Doe_Week43_2026-10-23.pdf`), the combined PDF, and a ZIP of all statements. Statements go to people with activity this week: pay, new charges, deductions, holds, credits, flight debt, or non-payable sales.
+- Payable checks CSV, payable-only CSV, and the Paychex import CSV (`Contractor,1099-NEC Amount`, one row per positive check).
+- For each company payee (for example AEG): the original Spark workbook with every column and its formatting kept, filtered to that company's agents, with payable rows repriced; plus an invoice PDF and CSV.
+- Full package ZIP (`EMG_Week43_Final_Package_2026-10-23.zip`) with everything above, the original source files, a rules snapshot and a manifest of SHA-256 hashes.
+
+Corrections produce `..._Final_Rev3_...` files, and earlier final revisions stay downloadable.
+
+**Email statements** lists every statement with its verified roster address, or the reason it can't be sent (no email, unverified, excluded). Choose people, type `SEND 2026-W43`, and each person receives one message with only their own PDF attached. Retries never resend. A send that was interrupted is marked *unknown* for a human to check. Delivery and bounce events arrive by webhook (`POST /api/email/events` with `X-Webhook-Secret`) or can be marked by hand. Real delivery needs `EMAIL_SEND_ENABLED=1` and SMTP settings. Otherwise messages go to an outbox in storage.
+
+To refresh emails from a newer control workbook, run `python -m emg.cli sync-roster CONTROL.xlsx`.

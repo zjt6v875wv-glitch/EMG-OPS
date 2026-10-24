@@ -127,7 +127,7 @@ def _store_bundle(c, run_id, b: WeekBundle) -> None:
         cur.executemany("insert into run_chargebacks(run_id,payee,vendor,enrollment_id,amount,verified,data) values (%s,%s,%s,%s,%s,%s,%s)",
                         [(run_id, x.payee, x.vendor, x.enrollment_id, x.amount, x.verified, J(x.to_dict())) for x in b.chargebacks])
         items = [("nonpayable", r.raw.get("company_payee") or r.raw.get("seller"), r.vendor, r.enrollment_id, r.to_dict() | {"company_payee": r.raw.get("company_payee")}) for r in b.nonpayable]
-        items += [("pending", r.raw_rep, r.vendor, r.enrollment_id, r.to_dict()) for r in b.pending]
+        items += [("pending", r.raw.get("seller") or r.raw_rep, r.vendor, r.enrollment_id, r.to_dict()) for r in b.pending]
         items += [("company_adjustment", None, a.vendor, a.enrollment_id, a.to_dict()) for a in b.company_adjustments]
         cur.executemany("insert into run_items(run_id,kind,payee,vendor,enrollment_id,data) values (%s,%s,%s,%s,%s,%s)",
                         [(run_id, k, p, v, e, J(d)) for k, p, v, e, d in items])

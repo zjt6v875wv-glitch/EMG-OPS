@@ -12,10 +12,11 @@ const SUMMARY: [string, string][] = [
   ["protected_check", "Protected minimum check"], ["commission_payment", "Commission payment"], ["cash_credits", "Refunds / reimbursements / bonuses"],
 ];
 
-export function Statement({ d }: { d: any }) {
+export function Statement({ d, pdfUrl }: { d: any; pdfUrl?: string }) {
   const r = d.result;
   return (
     <>
+      {pdfUrl && <p><a className="btn" href={pdfUrl}>Download PDF statement</a></p>}
       <div className="grid">
         <div className="stat ok"><div className="muted small">Final check</div><div className="big"><Money v={r.final_check} /></div><Badge tone={statusTone(r.status)}>{r.status}</Badge></div>
         <div className="stat"><div className="muted small">Gross</div><div className="big"><Money v={r.gross_compensation} /></div></div>

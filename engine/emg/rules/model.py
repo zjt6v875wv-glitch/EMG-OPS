@@ -185,7 +185,14 @@ class RuleSet:
         return True if g is None else g.matches(utility)
 
     def canon(self, raw, vendor: str | None = None) -> str:
-        return self.aliases.resolve(raw, vendor)
+        """Alias table first; then a roster person whose normalized name matches
+        (repairs mojibake/case/hyphen variants to the roster spelling)."""
+        name = self.aliases.resolve(raw, vendor)
+        if name in self.people:
+            return name
+        if not hasattr(self, "_people_by_key"):
+            self._people_by_key = {key(p): p for p in self.people}
+        return self._people_by_key.get(key(name), name)
 
     def team(self, manager: str, week: str, vendor: str, product: str) -> set[str]:
         return {

@@ -91,6 +91,7 @@ def write_repriced_copy(src: str | Path, dest: str | Path, keep_agents_raw: set[
     agent_cols = [h[k] + 1 for k in ("SALES AGENT", "AGENT ID") if k in h]
     rce_col = h["RCE STATUS"] + 1
     keep_keys = {key(a) for a in keep_agents_raw}
+    original_total = sum((num(ws.cell(r, amount_col).value) for r in range(2, ws.max_row + 1)), Decimal(0))
     kept = repriced = 0
     for row in range(ws.max_row, 1, -1):
         vals = [ws.cell(row, c).value for c in agent_cols]
@@ -111,7 +112,9 @@ def write_repriced_copy(src: str | Path, dest: str | Path, keep_agents_raw: set[
             for c in row:
                 if isinstance(c.value, str) and "Commission Total:" in c.value:
                     c.value = re.sub(r"Commission Total: \$[\d,\.]+", f"Commission Total: ${total:,.0f}", c.value)
-                elif isinstance(c.value, str) and c.value.upper().startswith("=SUM(DETAILS!"):
+                elif (isinstance(c.value, str) and c.value.upper().startswith("=SUM(DETAILS!")) or (
+                        isinstance(c.value, (int, float)) and not isinstance(c.value, bool) and original_total and Decimal(str(c.value)) == original_total):
+                    # the commission total cell becomes a live sum of the repriced rows
                     letter = openpyxl.utils.get_column_letter(amount_col)
                     c.value = f"=SUM(DETAILS!{letter}2:{letter}{kept + 1})"
     wb.save(dest)

@@ -19,3 +19,13 @@ def payroll_calculate(c, p: dict, actor: str):
 
     r = runs.calculate(c, p["week"], actor, p.get("rule_version"))
     return {"run_id": str(r["id"]), "revision": r["revision"]}
+
+
+@handler("reports.build")
+def reports_build(c, p: dict, actor: str):
+    from . import reports
+
+    return reports.build(c, get_storage(), p["run_id"], actor, tuple(p.get("kinds") or reports.ALL_KINDS))
+
+
+from . import email  # noqa: E402,F401  (registers email.send)

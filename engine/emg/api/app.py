@@ -17,7 +17,8 @@ from fastapi.responses import JSONResponse, Response
 from pydantic import BaseModel
 
 from ..db.conn import _default, audit, connect
-from ..services import adjustments, auth, imports, jobs, ledger, payments, people, runs
+from ..services import adjustments, auth, imports, jobs, ledger, payments, people, reports, runs
+from ..services import email as email_svc
 from ..services import rules as rules_svc
 from ..services.storage import get_storage
 
@@ -510,6 +511,133 @@ def ledger_balances(person: str | None = None, u=Depends(current_user), c=Depend
 def ledger_history(person: str, u=Depends(current_user), c=Depends(db)):
     _see(c, u, person)
     return ledger.history(c, person)
+
+
+# -- reports -----------------------------------------------------------------------
+
+class BuildBody(BaseModel):
+    kinds: list[str] | None = None
+    background: bool = False
+
+
+@app.post("/api/runs/{run_id}/reports")
+def build_reports(run_id: uuid.UUID, body: BuildBody, u=Depends(need("reports.build")), c=Depends(db)):
+    kinds = tuple(body.kinds or reports.ALL_KINDS)
+    bad = [k for k in kinds if k not in reports.ALL_KINDS]
+    if bad:
+        raise ValueError(f"Unknown report kinds {bad}")
+    if body.background:
+        return {"job_id": jobs.enqueue(c, "reports.build", {"run_id": str(run_id), "kinds": list(kinds)}, u["email"])["id"]}
+    return reports.build(c, get_storage(), run_id, u["email"], kinds)
+
+
+@app.get("/api/runs/{run_id}/reports")
+def run_reports(run_id: uuid.UUID, u=Depends(current_user), c=Depends(db)):
+    rows = reports.list_current(c, run_id)
+    vis = auth.visible_people(c, u)
+    return rows if vis is None else [r for r in rows if r["kind"] == "agent_pdf" and r["person"] in vis]
+
+
+@app.get("/api/weeks/{week}/reports")
+def week_reports(week: str, u=Depends(need("reports.build")), c=Depends(db)):
+    return reports.history(c, week)
+
+
+@app.get("/api/reports/{version_id}/download")
+def download_report(version_id: uuid.UUID, u=Depends(current_user), c=Depends(db)):
+    r = c.execute("select * from report_versions where id=%s", (version_id,)).fetchone()
+    if not r:
+        raise LookupError("report not found")
+    if not auth.can(u, "reports.build"):
+        if r["kind"] != "agent_pdf":
+            raise HTTPException(403, "Not allowed")
+        _see(c, u, r["person"])
+    audit(c, u["email"], "report.download", "report", str(version_id), None, {"file": r["file_name"]})
+    media = {"pdf": "application/pdf", "csv": "text/csv", "zip": "application/zip",
+             "xlsx": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"}.get(r["file_name"].rsplit(".", 1)[-1], "application/octet-stream")
+    return Response(get_storage().get_bytes(r["storage_key"]), media_type=media,
+                    headers={"Content-Disposition": f'attachment; filename="{r["file_name"]}"'})
+
+
+# -- email ---------------------------------------------------------------------------
+
+@app.get("/api/runs/{run_id}/email")
+def email_preview(run_id: uuid.UUID, u=Depends(need("email.send")), c=Depends(db)):
+    return email_svc.preview(c, run_id)
+
+
+class AuthorizeBody(BaseModel):
+    people: list[str]
+    confirm: str
+    allow_preliminary: bool = False
+
+
+@app.post("/api/runs/{run_id}/email/authorize")
+def email_authorize(run_id: uuid.UUID, body: AuthorizeBody, u=Depends(need("email.send")), c=Depends(db)):
+    if body.allow_preliminary and not auth.can(u, "payroll.correct"):
+        raise HTTPException(403, "Only an owner or admin can send preliminary statements")
+    return email_svc.authorize(c, run_id, body.people, u["email"], body.confirm, body.allow_preliminary)
+
+
+@app.get("/api/runs/{run_id}/email/sends")
+def email_sends(run_id: uuid.UUID, u=Depends(need("email.send")), c=Depends(db)):
+    return email_svc.sends(c, run_id)
+
+
+class TemplateBody(BaseModel):
+    subject: str
+    body: str
+
+
+@app.get("/api/email/template")
+def get_template(u=Depends(need("email.send")), c=Depends(db)):
+    return email_svc.template(c)
+
+
+@app.put("/api/email/template")
+def put_template(body: TemplateBody, u=Depends(need("email.send")), c=Depends(db)):
+    return email_svc.save_template(c, body.subject, body.body, u["email"])
+
+
+class ExcludeBody(BaseModel):
+    person: str
+    reason: str = ""
+    excluded: bool = True
+
+
+@app.post("/api/email/exclusions")
+def set_exclusion(body: ExcludeBody, u=Depends(need("email.send")), c=Depends(db)):
+    (email_svc.exclude(c, body.person, body.reason, u["email"]) if body.excluded else email_svc.include(c, body.person, u["email"]))
+    return {"ok": True}
+
+
+class EventBody(BaseModel):
+    message_id: str
+    status: str
+    detail: str = ""
+
+
+@app.post("/api/email/events")
+def email_event(body: EventBody, request: Request, authorization: str | None = Header(default=None), x_webhook_secret: str | None = Header(default=None), c=Depends(db)):
+    """Delivery/bounce events: from the provider (shared secret) or from a signed-in payroll user (manual reconciliation)."""
+    secret = os.environ.get("EMAIL_WEBHOOK_SECRET")
+    actor = "provider"
+    if not (secret and x_webhook_secret and secrets_equal(secret, x_webhook_secret)):
+        tok = _token(request, authorization)
+        u = tok and auth.user_for_token(c, tok)
+        if not u or not auth.can(u, "email.send"):
+            raise HTTPException(401, "Not allowed")
+        actor = u["email"]
+    row = email_svc.record_event(c, body.message_id, body.status, body.detail, actor)
+    if not row:
+        raise LookupError("No send with that message id")
+    return row
+
+
+def secrets_equal(a: str, b: str) -> bool:
+    import hmac
+
+    return hmac.compare_digest(a.encode(), b.encode())
 
 
 # -- audit -------------------------------------------------------------------------

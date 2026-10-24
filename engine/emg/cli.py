@@ -3,6 +3,7 @@
     python -m emg.cli migrate
     python -m emg.cli create-user owner@example.com "Owner" owner
     python -m emg.cli seed-control CONTROL.xlsx --week 2026-W42 [--overlay rules_overlay.json]
+    python -m emg.cli sync-roster CONTROL.xlsx                            # refresh statement emails from a newer Email Map
     python -m emg.cli import FILE --week 2026-W43 [--importer spark] [--commit]
     python -m emg.cli calculate 2026-W43
     python -m emg.cli finalize RUN_ID --key KEY
@@ -80,6 +81,25 @@ def seed_control(c, control: Path, week: str, overlay: Path | None, actor: str =
 def cmd_seed_control(a):
     with connect() as c:
         print(json.dumps(seed_control(c, Path(a.control), a.week, Path(a.overlay) if a.overlay else None), indent=1))
+
+
+def sync_roster(c, control: Path, actor: str = ACTOR) -> dict:
+    """Update people and statement emails from a newer control workbook's Email Map (never removes anyone)."""
+    from .rules.control_import import import_email_map
+    from .services import people
+
+    n = 0
+    for e in import_email_map(control):
+        before = c.execute("select email, email_verified, email_excluded from people where name=%s", (e["person"],)).fetchone()
+        people.upsert(c, e["person"], actor, email=e.get("email"), email_verified=e["verified"], email_excluded=e["excluded"],
+                      email_status=e.get("status"), notes=e.get("note"))
+        n += before != c.execute("select email, email_verified, email_excluded from people where name=%s", (e["person"],)).fetchone()
+    return {"changed": n}
+
+
+def cmd_sync_roster(a):
+    with connect() as c:
+        print(json.dumps(sync_roster(c, Path(a.control))))
 
 
 def import_file(c, storage, path: Path, week: str, importer: str | None, commit: bool, actor: str = ACTOR) -> dict:
@@ -193,6 +213,7 @@ def main(argv=None):
     x = sp.add_parser("seed-control")
     x.add_argument("control"); x.add_argument("--week", required=True); x.add_argument("--overlay")
     x.set_defaults(fn=cmd_seed_control)
+    x = sp.add_parser("sync-roster"); x.add_argument("control"); x.set_defaults(fn=cmd_sync_roster)
     x = sp.add_parser("import")
     x.add_argument("file"); x.add_argument("--week", required=True); x.add_argument("--importer"); x.add_argument("--commit", action="store_true")
     x.set_defaults(fn=cmd_import)
