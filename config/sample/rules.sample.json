@@ -1,0 +1,50 @@
+{
+  "version": "sample-1",
+  "_comment": "FICTIONAL sample. Names and rates are invented for local development and tests. Real rules are imported from the EMG Payroll Control workbook and never committed.",
+  "utility_groups": {
+    "NORTH": {"contains_any": ["NORTH POWER"]},
+    "SOUTH": {"contains_any": ["SOUTH ELECTRIC"]}
+  },
+  "vendors": {
+    "Nexamp": {"basis": "kwh", "products": ["LMI", "OPEN"]},
+    "Arcadia": {"basis": "kwh", "products": ["CS"]},
+    "Spark": {"basis": "enrollment", "products": []}
+  },
+  "aliases": [
+    {"canonical": "Alex Rivera", "alias": "A. Rivera"},
+    {"canonical": "Alex Rivera", "alias": "SPK001", "scope": "Spark"},
+    {"canonical": "Robin Shaw", "alias": "Robbie"}
+  ],
+  "agent_rates": [
+    {"id": "nex-lmi", "vendor": "Nexamp", "product": "LMI", "rate": "0.010"},
+    {"id": "nex-open", "vendor": "Nexamp", "product": "OPEN", "rate": "0.008"},
+    {"id": "nex-lmi-north", "vendor": "Nexamp", "product": "LMI", "utility_group": "NORTH", "rate": "0.012"},
+    {"id": "arc-cs", "vendor": "Arcadia", "product": "CS", "rate": "0.009"},
+    {"id": "spk-default", "vendor": "Spark", "rate": "40", "basis": "enrollment"},
+    {"id": "spk-robin", "vendor": "Spark", "agent": "Robin Shaw", "rate": "45", "basis": "enrollment"}
+  ],
+  "memberships": [
+    {"manager": "Jordan Lee", "agent": "Alex Rivera"},
+    {"manager": "Jordan Lee", "agent": "Sam Patel"},
+    {"manager": "Jordan Lee", "agent": "Taylor Brooks", "vendors": ["Nexamp"]}
+  ],
+  "override_rules": [
+    {"id": "jl-team", "manager": "Jordan Lee", "type": "fixed", "vendors": ["Nexamp", "Arcadia"], "rate": "0.002"},
+    {"id": "jl-target", "manager": "Jordan Lee", "type": "target_remainder", "vendors": ["Nexamp"], "products": ["LMI"], "utility_group": "NORTH", "rate": "0.015"},
+    {"id": "robin-flat", "manager": "Robin Shaw", "type": "flat", "vendors": ["Spark"], "rate": "5", "sellers": ["Casey Morgan"]}
+  ],
+  "personal_targets": [
+    {"person": "Jordan Lee", "vendor": "Nexamp", "product": "LMI", "target": "0.014", "note": "Manager's own sales: personal target, no override on top"}
+  ],
+  "routing_rules": [
+    {"id": "partner-spark", "vendor": "Spark", "sellers": ["Pat Quinn", "Lee Ortiz"], "payee": "Partner Co", "rate": "70", "note": "Partner pays its own agents"}
+  ],
+  "badge_rules": [],
+  "temporary_assignments": [],
+  "collection_rules": [
+    {"person": "Sam Patel", "method": "fixed", "value": "50", "debts": ["advance"], "note": "Agreed $50/week advance repayment"}
+  ],
+  "commercial": {},
+  "deduction_order": ["room", "advance", "flight", "other"],
+  "people": ["Alex Rivera", "Jordan Lee", "Sam Patel", "Taylor Brooks", "Robin Shaw", "Casey Morgan"]
+}

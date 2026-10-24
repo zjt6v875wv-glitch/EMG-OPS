@@ -1,0 +1,17 @@
+__pycache__/
+*.pyc
+.pytest_cache/
+node_modules/
+.next/
+.env
+.env.local
+/storage/
+/private/
+*.xlsx
+*.xlsm
+*.pdf
+*.zip
+!config/sample/**
+!engine/tests/fixtures/**
+.venv/
+dist/
